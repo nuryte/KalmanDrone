@@ -122,16 +122,18 @@ true_state = np.array([[400.0], [300.0], [0.0], [0.0], [0.0], [0.0]])  # Include
 
 # Kalman Filter Setup with expanded state vector
 dt = 0.1  # Time step
-drag_coefficient = 1  # This should be between 0 and 1, closer to 1
+b_linear = 0.1    # Linear drag coefficient
+b_angular = 1  # Angular drag coefficient
+
 A = np.array([
-    [1, 0, 0, dt, 0, 0, 0.5 * dt**2, 0, 0],         # x_position updated with x_velocity and x_acceleration
-    [0, 1, 0, 0, dt, 0, 0, 0.5 * dt**2, 0],         # y_position updated with y_velocity and y_acceleration
-    [0, 0, 1, 0, 0, dt, 0, 0, 0.5 * dt**2],         # orientation updated with angular_velocity and angular_acceleration
-    [0, 0, 0, 1, 0, 0, dt, 0, 0],                   # x_velocity updated with x_acceleration
-    [0, 0, 0, 0, 1, 0, 0, dt, 0],                   # y_velocity updated with y_acceleration
-    [0, 0, 0, 0, 0, 1, 0, 0, dt],                   # angular_velocity updated with angular_acceleration
-    [0, 0, 0, 0, 0, 0, 1, 0, 0],                    # x_acceleration (assumed constant for this timestep)
-    [0, 0, 0, 0, 0, 0, 0, 1, 0],                    # y_acceleration (assumed constant for this timestep)
+    [1, 0, 0, dt, 0, 0, 0.5 * dt**2, 0, 0],                # x_position updated
+    [0, 1, 0, 0, dt, 0, 0, 0.5 * dt**2, 0],                # y_position updated
+    [0, 0, 1, 0, 0, dt, 0, 0, 0.5 * dt**2],                # orientation updated
+    [0, 0, 0, 1 - b_linear * dt, 0, 0, dt, 0, 0],          # x_velocity updated with drag
+    [0, 0, 0, 0, 1 - b_linear * dt, 0, 0, dt, 0],          # y_velocity updated with drag
+    [0, 0, 0, 0, 0, 1 - b_angular * dt, 0, 0, dt],         # angular_velocity updated with drag
+    [0, 0, 0, 0, 0, 0, 1, 0, 0],                           # x_acceleration
+    [0, 0, 0, 0, 0, 0, 0, 1, 0],                           # y_accel
     [0, 0, 0, 0, 0, 0, 0, 0, 1]])                   # angular_acceleration (assumed constant for this timestep)
 
 B = np.array([[0, 0],
@@ -160,13 +162,16 @@ angle_measurement_noise_variance = 1
 R_position = np.eye(2) * position_measurement_noise_variance
 R_angle = np.array([[angle_measurement_noise_variance]])
 
-initial_covariance_value =10000
+initial_covariance_value =1000
 
 Q = np.eye(9) * .01
 R = np.eye(3) * .02
 P = np.eye(9) * initial_covariance_value  # initial_covariance_value is a tuning parameter
 
 kf = KalmanFilter(dt, A, B, H, Q, R, P)
+
+kf.x[0] = true_state[0]
+kf.x[1] = true_state[1]
 
 def position_measurement_available(true_state):
     if np.random.random() > .7:
@@ -193,6 +198,7 @@ def get_angle_measurement(true_state):
 # Main Loop
 time = 0
 turn_time = 0
+total_turn_time = 0
 while True:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -216,15 +222,23 @@ while True:
     #     angular_velocity = 5
     # Get distance to the wall
     distance_to_wall = get_distance_to_wall(true_state[:2], true_state[2], walls, screen)
-    if distance_to_wall < 50:
-        turn_time = np.random.random() * 10 + 10
+    if distance_to_wall < 50 and turn_time <= 0:
+        turn_time = np.random.random() * 5 + 5
+        total_turn_time = turn_time
 
+    # linear_velocity = 0
+    # if time < 10:
     linear_velocity = 1
     angular_velocity = 0
     if turn_time > 0:
+        if turn_time > total_turn_time/2:
+            linear_velocity = 0
+            angular_velocity = 0.1
+        else:
+            linear_velocity = 0
+            angular_velocity = -0.1
+
         turn_time -= dt
-        linear_velocity = 0
-        angular_velocity = 0.1
 
     
 
@@ -232,7 +246,7 @@ while True:
 
     # Assuming control_inputs are [linear_acceleration, angular_acceleration]
     linear_acceleration, angular_acceleration = control_inputs[0, 0], control_inputs[1, 0]
-
+    temp_true = true_state.copy()
     # Update velocities based on acceleration
     true_state[3] += linear_acceleration * dt  # Update linear velocity
     true_state[5] += angular_acceleration * dt # Update angular velocity
@@ -256,10 +270,9 @@ while True:
 
 
     if check_collision(robot_rect, walls):
-        true_state[0] -= linear_velocity * dt * math.cos(math.radians(true_state[2]))
-        true_state[1] -= linear_velocity * dt * math.sin(math.radians(true_state[2]))
+        true_state[0] = temp_true[0]
+        true_state[1] = temp_true[1]
         true_state[3] = 0
-        true_state[4] = 0
 
     estx = kf.x[0, 0]
     esty = kf.x[1, 0]
