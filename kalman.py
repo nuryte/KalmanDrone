@@ -54,6 +54,10 @@ def draw_ellipse(surface, color, position, covariance):
     ellipse_rect = pygame.Rect(int(position[0] - width / 2), int(position[1] - height / 2), width, height)
     pygame.draw.ellipse(surface, color, ellipse_rect, 1)
 
+def render_text(screen, text, position, font_size=30, color=(255, 255, 255)):
+    font = pygame.font.SysFont(None, font_size)
+    text_surface = font.render(text, True, color)
+    screen.blit(text_surface, position)
 
 
 
@@ -68,41 +72,60 @@ true_state = np.array([[400.0], [300.0], [0.0], [0.0], [0.0], [0.0]])  # Include
 
 # Kalman Filter Setup with expanded state vector
 dt = 0.5  # Time step
-A = np.array([[1, 0, 0, dt,  0,  0],
-              [0, 1, 0,  0, dt,  0],
-              [0, 0, 1,  0,  0, dt],
-              [0, 0, 0,  1,  0,  0],
-              [0, 0, 0,  0,  1,  0],
-              [0, 0, 0,  0,  0,  1]])
-B = np.zeros((6, 2))  # Define based on your control inputs
+drag_coefficient = 1  # This should be between 0 and 1, closer to 1
+A = np.array([
+    [1, 0, 0, dt, 0, 0, 0.5 * dt**2, 0, 0],         # x_position updated with x_velocity and x_acceleration
+    [0, 1, 0, 0, dt, 0, 0, 0.5 * dt**2, 0],         # y_position updated with y_velocity and y_acceleration
+    [0, 0, 1, 0, 0, dt, 0, 0, 0.5 * dt**2],         # orientation updated with angular_velocity and angular_acceleration
+    [0, 0, 0, 1, 0, 0, dt, 0, 0],                   # x_velocity updated with x_acceleration
+    [0, 0, 0, 0, 1, 0, 0, dt, 0],                   # y_velocity updated with y_acceleration
+    [0, 0, 0, 0, 0, 1, 0, 0, dt],                   # angular_velocity updated with angular_acceleration
+    [0, 0, 0, 0, 0, 0, 1, 0, 0],                    # x_acceleration (assumed constant for this timestep)
+    [0, 0, 0, 0, 0, 0, 0, 1, 0],                    # y_acceleration (assumed constant for this timestep)
+    [0, 0, 0, 0, 0, 0, 0, 0, 1]])                   # angular_acceleration (assumed constant for this timestep)
+
+B = np.array([[0, 0],
+              [0, 0],
+              [0, 0],
+              [0, 0],  # Control input 1 affects x_velocity
+              [0, 0],  # Control input 2 affects y_velocity
+              [0, 0],
+              [0, 0],
+              [0, 0],
+              [0, 0]])  # Assuming no direct control input for angular velocity
+
 
 # Measurement matrix temp
-H = np.array([[1, 0, 0, 0, 0, 0],
-                       [0, 1, 0, 0, 0, 0]])
+H = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],  # Measure x_position
+                       [0, 1, 0, 0, 0, 0, 0, 0, 0]]) # Measure y_position
 # Measurement matrix for position
-H_position = np.array([[1, 0, 0, 0, 0, 0],
-                       [0, 1, 0, 0, 0, 0]])
+# Measurement matrix for position (assuming measurements are x and y position)
+H_position = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],  # Measure x_position
+                       [0, 1, 0, 0, 0, 0, 0, 0, 0]]) # Measure y_position
 
-# Measurement matrix for angle
-H_angle = np.array([[0, 0, 1, 0, 0, 0]])
-position_measurement_noise_variance = 2000
+# Measurement matrix for angle (assuming measurement is orientation)
+H_angle = np.array([[0, 0, 1, 0, 0, 0, 0, 0, 0]])    # Measure orientation
+position_measurement_noise_variance = 2500
 angle_measurement_noise_variance = 1
 R_position = np.eye(2) * position_measurement_noise_variance
 R_angle = np.array([[angle_measurement_noise_variance]])
 
-Q = np.eye(6) * 1
-R = np.eye(3) * 100
-P = np.eye(6) * 100
+initial_covariance_value =100
+
+Q = np.eye(9) * .01
+R = np.eye(3) * 1
+P = np.eye(9) * initial_covariance_value  # initial_covariance_value is a tuning parameter
+
 kf = KalmanFilter(dt, A, B, H, Q, R, P)
 
 def position_measurement_available(true_state):
-    if np.random.random() > .9:
+    if np.random.random() > .7:
         return True
     return False
 
 def get_position_measurement(true_state):
     # Simulate Measurement with Some Noise for x and y position
-    position_noise = np.random.normal(0, 10, size=(2, 1))  # Noise with standard deviation of 10
+    position_noise = np.random.normal(0, 5, size=(2, 1))  # Noise with standard deviation of 10
     measured_position = true_state[:2] + position_noise
 
 
@@ -118,6 +141,7 @@ def get_angle_measurement(true_state):
     return angle_measurement
 
 # Main Loop
+time = 0
 while True:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -125,15 +149,26 @@ while True:
             sys.exit()
 
     # Simulate Control Inputs (adapt as needed)
-    linear_velocity = 3
-    angular_velocity = 5
+    if time %100 < 25:
+        linear_velocity = 6
+        angular_velocity = 0
+    elif time %100 < 50:
+        linear_velocity = 0
+        angular_velocity = 5
+    elif time %100 < 75:
+        linear_velocity = 6
+        angular_velocity = 0
+    elif time %100 < 100:
+        linear_velocity = 0
+        angular_velocity = 5
     control_inputs = np.array([[linear_velocity], [angular_velocity]])
 
     # Update true state
     true_state[2] += angular_velocity * dt
     true_state[0] += linear_velocity * dt * math.cos(math.radians(true_state[2]))
     true_state[1] += linear_velocity * dt * math.sin(math.radians(true_state[2]))
-    true_state[3] = linear_velocity
+    true_state[3] = linear_velocity * math.cos(math.radians(true_state[2]))
+    true_state[4] = linear_velocity * math.sin(math.radians(true_state[2]))
     true_state[5] = angular_velocity
 
     # Predict step
@@ -156,7 +191,15 @@ while True:
     draw_robot(screen, true_state[:2], true_state[2], (0, 0, 255))  # True state
     draw_robot(screen, kf.x[:2], kf.x[2], (255, 0, 0))  # Estimated state
     draw_ellipse(screen, (0, 255, 0), kf.x[:2], kf.P)  # Uncertainty ellipse
+
+    # Displaying the current and estimated state
+    true_state_text = f"True State: x={true_state[0,0]:.2f}, y={true_state[1,0]:.2f}, angle={math.degrees(math.atan2(math.cos(math.radians(true_state[2,0])),   math.sin(math.radians(true_state[2,0])))):.2f}, vx={true_state[3,0]:.2f}, vy={true_state[4,0]:.2f}, omega={true_state[5,0]:.2f}"
+    estimated_state_text = f"Estimated: x={kf.x[0,0]:.2f}, y={kf.x[1,0]:.2f}, angle={math.degrees(math.atan2(math.cos(math.radians(kf.x[2,0])),   math.sin(math.radians(kf.x[2,0])))):.2f}, vx={kf.x[3,0]:.2f}, vy={kf.x[4,0]:.2f}, omega={kf.x[5,0]:.2f}"
+    render_text(screen, true_state_text, (10, 10))
+    render_text(screen, estimated_state_text, (10, 40))
+
     pygame.display.flip()
 
     pygame.time.delay(100)
     clock.tick(30)
+    time += dt
