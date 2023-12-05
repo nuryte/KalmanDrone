@@ -95,7 +95,7 @@ def draw_robot(surface, position, orientation, color):
     pygame.draw.polygon(surface, color, points)
 
 
-def draw_ellipse(surface, color, position, covariance):
+def draw_ellipse2(surface, color, position, covariance):
     """ Draw an ellipse representing the uncertainty in position. """
     # Ensure only the position covariance is used (top-left 2x2 submatrix)
     pos_covariance = covariance[:2, :2]
@@ -104,11 +104,51 @@ def draw_ellipse(surface, color, position, covariance):
     ellipse_rect = pygame.Rect(int(position[0] - width / 2), int(position[1] - height / 2), width, height)
     pygame.draw.ellipse(surface, color, ellipse_rect, 1)
 
+def draw_ellipse(surface, color, position, covariance, scale=2):
+    # Extract the position covariance (top-left 2x2 submatrix)
+    pos_covariance = covariance[:2, :2]
+
+    # Calculate eigenvalues and eigenvectors
+    eigenvalues, eigenvectors = np.linalg.eig(pos_covariance)
+
+    # Order eigenvalues and eigenvectors
+    order = eigenvalues.argsort()[::-1]
+    eigenvalues = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]
+
+    # Width and height of ellipse based on eigenvalues
+    width, height = np.sqrt(eigenvalues) * scale * 2  # Scale factor for visualization
+    width, height = int(width), int(height)
+
+    # Angle of rotation in radians
+    angle = np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0])
+
+    # Create a surface large enough to accommodate the rotated ellipse
+    max_dimension = max(width, height)
+    ellipse_surface = pygame.Surface((max_dimension * 2, max_dimension * 2), pygame.SRCALPHA)
+    ellipse_surface.fill((0, 0, 0, 0))  # Transparent background
+
+    # Draw the ellipse on the surface (centered)
+    ellipse_rect = pygame.Rect(max_dimension - width // 2, max_dimension - height // 2, width, height)
+    pygame.draw.ellipse(ellipse_surface, color, ellipse_rect, 1)
+
+    # Rotate the ellipse surface and blit onto the main surface
+    rotated_surface = pygame.transform.rotate(ellipse_surface, np.degrees(-angle))
+    rotated_rect = rotated_surface.get_rect(center=position)
+    surface.blit(rotated_surface, rotated_rect.topleft)
+
 def render_text(screen, text, position, font_size=30, color=(255, 255, 255)):
     font = pygame.font.SysFont(None, font_size)
     text_surface = font.render(text, True, color)
     screen.blit(text_surface, position)
 
+def rotate_covariance_matrix(theta, sigma_radial, sigma_perpendicular):
+    R_theta = np.array([[np.cos(theta), -np.sin(theta)], 
+                        [np.sin(theta), np.cos(theta)]])
+    R_unrotated = np.array([[sigma_radial**2, 0], 
+                            [0, sigma_perpendicular**2]])
+    R_rotated = R_theta @ R_unrotated @ R_theta.T
+    return R_rotated
 
 
 # Pygame Initialization
@@ -162,6 +202,10 @@ angle_measurement_noise_variance = 1
 R_position = np.eye(2) * position_measurement_noise_variance
 R_angle = np.array([[angle_measurement_noise_variance]])
 
+sigma_radial = 50.0  # Example value, adjust as needed
+sigma_perpendicular = 20.0  # Example value, adjust as needed
+
+
 initial_covariance_value =1000
 
 Q = np.eye(9) * .01
@@ -174,15 +218,14 @@ kf.x[0] = true_state[0]
 kf.x[1] = true_state[1]
 
 def position_measurement_available(true_state):
-    if np.random.random() > .7:
+    if np.random.random() > .95:
         return True
     return False
 
 def get_position_measurement(true_state):
     # Simulate Measurement with Some Noise for x and y position
-    position_noise = np.random.normal(0, 2, size=(2, 1))  # Noise with standard deviation of 10
+    position_noise = np.random.normal(0, 5, size=(2, 1))  # Noise with standard deviation of 10
     measured_position = true_state[:2] + position_noise
-
 
     return measured_position
 
@@ -223,7 +266,7 @@ while True:
     # Get distance to the wall
     distance_to_wall = get_distance_to_wall(true_state[:2], true_state[2], walls, screen)
     if distance_to_wall < 50 and turn_time <= 0:
-        turn_time = np.random.random() * 5 + 5
+        turn_time = np.random.random() * .5 + .5
         total_turn_time = turn_time
 
     # linear_velocity = 0
@@ -231,7 +274,7 @@ while True:
     linear_velocity = 1
     angular_velocity = 0
     if turn_time > 0:
-        if turn_time > total_turn_time/2:
+        if turn_time > 3*total_turn_time/4:
             linear_velocity = 0
             angular_velocity = 0.1
         else:
@@ -249,7 +292,9 @@ while True:
     temp_true = true_state.copy()
     # Update velocities based on acceleration
     true_state[3] += linear_acceleration * dt  # Update linear velocity
+    true_state[5] *= .99
     true_state[5] += angular_acceleration * dt # Update angular velocity
+    
 
     # Convert orientation to radians for calculations
     orientation_rad = math.radians(true_state[2, 0])
@@ -283,7 +328,8 @@ while True:
     # Update with position measurement
     if position_measurement_available(true_state):
         position_measurement = get_position_measurement(true_state)
-        kf.set_measurement_matrix(H_position, R_position)
+        R_postemp = rotate_covariance_matrix(orientation_rad, sigma_radial, sigma_perpendicular)
+        kf.set_measurement_matrix(H_position, R_postemp)
         kf.update(position_measurement)
 
     # Update with angle measurement
