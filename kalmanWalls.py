@@ -105,6 +105,10 @@ def draw_ellipse2(surface, color, position, covariance):
     pygame.draw.ellipse(surface, color, ellipse_rect, 1)
 
 def draw_ellipse(surface, color, position, covariance, scale=2):
+    # Flatten position array and convert to integer tuple
+    position = tuple(map(int, position.flatten()))
+
+
     # Extract the position covariance (top-left 2x2 submatrix)
     pos_covariance = covariance[:2, :2]
 
@@ -134,6 +138,13 @@ def draw_ellipse(surface, color, position, covariance, scale=2):
 
     # Rotate the ellipse surface and blit onto the main surface
     rotated_surface = pygame.transform.rotate(ellipse_surface, np.degrees(-angle))
+
+    # Adjusted line with error handling
+    try:
+        rotated_rect = rotated_surface.get_rect(center=position)
+    except TypeError as e:
+        print("Error in rotated_rect assignment:", e)
+        print("Position value causing error:", position)
     rotated_rect = rotated_surface.get_rect(center=position)
     surface.blit(rotated_surface, rotated_rect.topleft)
 
