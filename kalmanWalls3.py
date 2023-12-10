@@ -264,18 +264,18 @@ b_linear = 0.1    # Linear drag coefficient
 b_angular = .5  # Angular drag coefficient
 
 A = np.array([
-    [1, 0, 0, dt, 0, 0, 0, 0, 0],                # x_position updated
-    [0, 1, 0, 0, dt, 0, 0, 0, 0],                # y_position updated
-    [0, 0, 1, 0, 0, dt, 0, 0, 0],                # orientation updated
-    [0, 0, 0, 1 - b_linear* dt, 0, 0, 0, 0, 0],          # x_velocity updated with drag
-    [0, 0, 0, 0, 1 - b_linear* dt, 0, 0, 0, 0],          # y_velocity updated with drag
-    [0, 0, 0, 0, 0, 1 - b_angular* dt, 0, 0, 0],         # angular_velocity updated with drag
+    [1, 0, 0, 0, 0, 0, 0, 0, 0],                # x_position updated
+    [0, 1, 0, 0, 0, 0, 0, 0, 0],                # y_position updated
+    [0, 0, 1, 0, 0, 0, 0, 0, 0],                # orientation updated
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],          # x_velocity updated with drag
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],          # y_velocity updated with drag
+    [0, 0, 0, 0, 0, 0, 0, 0, 0],         # angular_velocity updated with drag
     [0, 0, 0, 0, 0, 0, 0, 0, 0],                           # x_acceleration
     [0, 0, 0, 0, 0, 0, 0, 0, 0],                           # y_accel
     [0, 0, 0, 0, 0, 0, 0, 0, 0]])                   # angular_acceleration (assumed constant for this timestep)
 
-B = np.array([[0, 0],
-              [0, 0],
+B = np.array([[dt, 0],
+              [0, dt],
               [0, 0],
               [0, 0],  # Control input 1 affects x_velocity
               [0, 0],  # Control input 2 affects y_velocity
@@ -304,10 +304,10 @@ sigma_radial = 50.0  # Example value, adjust as needed
 sigma_perpendicular = 20.0  # Example value, adjust as needed
 
 
-initial_covariance_value =1
+initial_covariance_value =100
 
-Q = np.eye(9) * .01
-R = np.eye(3) * .02
+Q = np.eye(9) * .1 #increases how fast the uncertainty expands
+R = np.eye(3) * 10 #unused but should give how good the measurment is
 P = np.eye(9) * initial_covariance_value  # initial_covariance_value is a tuning parameter
 
 kf = KalmanFilter(dt, A, B, H, Q, R, P)
@@ -419,9 +419,10 @@ while True:
 
     estx = kf.x[0, 0]
     esty = kf.x[1, 0]
+    orientation_rad2 = math.radians(kf.x[2, 0])
 
     # Predict step
-    predict_control  = np.array([[linear_velocity * math.cos(orientation_rad) ], [linear_velocity* math.sin(orientation_rad)]])
+    predict_control  = np.array([[linear_velocity * math.cos(orientation_rad2) ], [linear_velocity* math.sin(orientation_rad2)]])
     kf.predict(predict_control, walls=walls)
 
     # Update with position measurement
@@ -432,11 +433,11 @@ while True:
     #     kf.update(position_measurement, H_position, R_postemp)
 
     #distance_to_wall
-    tof_measurement_noise_variance = 0.1
+    tof_measurement_noise_variance = 10
     # Measurement matrix temp
     oriented_dist = 1
     orientation_rad = math.atan2(math.cos(math.radians(true_state[2,0])),   math.sin(math.radians(true_state[2,0])))
-    if position_measurement_available(true_state):
+    if distance_to_wall < 100:#position_measurement_available(true_state):
         # Determine the measurement matrix H based on orientation
         if -np.pi/4 <= orientation_rad <= np.pi/4:  # Facing right
             H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0, 0]])  # Measure y_position
