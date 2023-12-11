@@ -253,7 +253,7 @@ screen = pygame.display.set_mode((800, 600))
 clock = pygame.time.Clock()
 
 # Initialize robot state with expanded state vector
-true_state = np.array([[400.0], [300.0], [90.0], [0.0], [0.0], [0.0]])  # Include velocity components
+true_state = np.array([[400.0], [300.0], [275.0], [0.0], [0.0], [0.0]])  # Include velocity components
 # Initialization
 robot = Robot(400, 300, 0)
 
@@ -398,7 +398,7 @@ while True:
     orientation_rad = math.radians(true_state[2, 0])
 
     # Update position based on updated velocity
-    true_state[0] += true_state[3] * dt * math.cos(orientation_rad) # Update x position
+    true_state[0] += true_state[3] * dt * math.cos(orientation_rad)  + .1 # Update x position
     true_state[1] += true_state[3] * dt * math.sin(orientation_rad) # Update y position
 
     # Update orientation based on angular velocity
@@ -433,7 +433,7 @@ while True:
     #     kf.update(position_measurement, H_position, R_postemp)
 
     #distance_to_wall
-    tof_measurement_noise_variance = 10000
+    tof_measurement_noise_variance = 5000
     angle_strict = np.pi/8
     # Measurement matrix temp
     measure = True
@@ -453,11 +453,12 @@ while True:
             # print("3", orientation_rad)
             H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0]])  # Measure x_position
             oriented_dist = 680 - np.sin(orientation_rad) * distance_to_wall#true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
-        elif -3*np.pi/4 - angle_strict > orientation_rad  or orientation_rad < 3*np.pi/4 + angle_strict:  # Facing down
+        elif -3*np.pi/4 - angle_strict > orientation_rad  or orientation_rad > 3*np.pi/4 + angle_strict:  # Facing down
             # print("4", orientation_rad)
             H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0, 0]])  # Measure y_position
             oriented_dist = 120 - np.cos(orientation_rad) * distance_to_wall#true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
         else:
+            # print("5", orientation_rad)
             measure = False
         
         if measure:
