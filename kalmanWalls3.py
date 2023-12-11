@@ -253,7 +253,7 @@ screen = pygame.display.set_mode((800, 600))
 clock = pygame.time.Clock()
 
 # Initialize robot state with expanded state vector
-true_state = np.array([[400.0], [300.0], [0.0], [0.0], [0.0], [0.0]])  # Include velocity components
+true_state = np.array([[400.0], [300.0], [90.0], [0.0], [0.0], [0.0]])  # Include velocity components
 # Initialization
 robot = Robot(400, 300, 0)
 
@@ -304,9 +304,9 @@ sigma_radial = 50.0  # Example value, adjust as needed
 sigma_perpendicular = 20.0  # Example value, adjust as needed
 
 
-initial_covariance_value =100
+initial_covariance_value = 10000
 
-Q = np.eye(9) * .1 #increases how fast the uncertainty expands
+Q = np.eye(9) * 5 #increases how fast the uncertainty expands
 R = np.eye(3) * 10 #unused but should give how good the measurment is
 P = np.eye(9) * initial_covariance_value  # initial_covariance_value is a tuning parameter
 
@@ -363,8 +363,8 @@ while True:
     #     angular_velocity = 5
     # Get distance to the wall
     distance_to_wall = get_distance_to_wall(true_state[:2], true_state[2], walls, screen)
-    if distance_to_wall < 50 and turn_time <= 0:
-        turn_time = np.random.random() * 2 + 1
+    if distance_to_wall < 80 and turn_time <= 0:
+        turn_time = np.random.random() * 2 + 3 + 1
         total_turn_time = turn_time
 
     # linear_velocity = 0
@@ -372,7 +372,7 @@ while True:
     linear_velocity = 10
     angular_velocity = 0
     if turn_time > 0:
-        # if turn_time > 3*total_turn_time/4:
+        
         linear_velocity = 0
         angular_velocity = .3
         # else:
@@ -433,30 +433,39 @@ while True:
     #     kf.update(position_measurement, H_position, R_postemp)
 
     #distance_to_wall
-    tof_measurement_noise_variance = 10
+    tof_measurement_noise_variance = 10000
+    angle_strict = np.pi/8
     # Measurement matrix temp
+    measure = True
     oriented_dist = 1
-    orientation_rad = math.atan2(math.cos(math.radians(true_state[2,0])),   math.sin(math.radians(true_state[2,0])))
-    if distance_to_wall < 100:#position_measurement_available(true_state):
+    orientation_rad = math.atan2(math.cos(math.radians(kf.x[2,0])),   math.sin(math.radians(kf.x[2,0]))) #normalize angle between -pi and pi
+    if distance_to_wall < 100 and turn_time <= 0:#position_measurement_available(true_state):
         # Determine the measurement matrix H based on orientation
-        if -np.pi/4 <= orientation_rad <= np.pi/4:  # Facing right
+        if -np.pi/4 + angle_strict < orientation_rad < np.pi/4- angle_strict:  # Facing up
+            # print("1", orientation_rad)
             H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0, 0]])  # Measure y_position
-            oriented_dist = true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
-        elif np.pi/4 < orientation_rad < 3*np.pi/4:  # Facing up
+            oriented_dist = 480 - np.cos(orientation_rad) * distance_to_wall#true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
+        elif -3*np.pi/4 + angle_strict < orientation_rad < -np.pi/4 - angle_strict:  # Facing left
+            # print("2", orientation_rad)
             H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0]])  # Measure x_position
-            oriented_dist = true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
-        elif -3*np.pi/4 < orientation_rad < -np.pi/4:  # Facing down
+            oriented_dist = 120 - np.sin(orientation_rad) * distance_to_wall#true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
+        elif np.pi/4 + angle_strict < orientation_rad < 3*np.pi/4- angle_strict:  # Facing right
+            # print("3", orientation_rad)
             H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0]])  # Measure x_position
-            oriented_dist = true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
-        else:  # Facing left
+            oriented_dist = 680 - np.sin(orientation_rad) * distance_to_wall#true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
+        elif -3*np.pi/4 - angle_strict > orientation_rad  or orientation_rad < 3*np.pi/4 + angle_strict:  # Facing down
+            # print("4", orientation_rad)
             H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0, 0]])  # Measure y_position
-            oriented_dist = true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
+            oriented_dist = 120 - np.cos(orientation_rad) * distance_to_wall#true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
+        else:
+            measure = False
+        
+        if measure:
+            # Measurement noise covariance
+            R_tof = np.array([[tof_measurement_noise_variance]])
 
-        # Measurement noise covariance
-        R_tof = np.array([[tof_measurement_noise_variance]])
-
-        # Update Kalman Filter with the distance measurement
-        kf.update(oriented_dist, H_tof, R_tof)
+            # Update Kalman Filter with the distance measurement
+            kf.update(oriented_dist, H_tof, R_tof)
 
 
     # Update with angle measurement
