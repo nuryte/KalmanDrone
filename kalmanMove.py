@@ -20,9 +20,14 @@ class KalmanFilter:
         self.R = R
 
 
-    def predict(self, u=0, walls=None):
+    def predict(self, u=0, walls=None, Q = None):
         self.x = np.dot(self.A, self.x) + np.dot(self.B, u)
-        self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
+        if Q is None:
+            self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
+        else:
+            
+            print(Q[0:2, 0:2])
+            self.P = np.dot(np.dot(self.A, self.P), self.A.T) + Q
 
         for i in range(len(P)):
             for j in range(len(P[i])):
@@ -84,39 +89,6 @@ class KalmanFilter:
         self.x = self.x + np.dot(K, y)
         self.P = self.P - np.dot(K, np.dot(H_custom, self.P))
 
-class Robot:
-    def __init__(self, x, y, orientation, size=20, max_speed=1, max_turn_rate=0.1):
-        # Initialize robot state
-        self.position = np.array([x, y])
-        self.orientation = orientation
-        self.size = size
-        self.max_speed = max_speed
-        self.max_turn_rate = max_turn_rate
-
-    def move(self, linear_velocity, angular_velocity, dt):
-        # Limit the velocities
-        linear_velocity = max(min(linear_velocity, self.max_speed), -self.max_speed)
-        angular_velocity = max(min(angular_velocity, self.max_turn_rate), -self.max_turn_rate)
-
-        # Update orientation
-        self.orientation += angular_velocity * dt
-        self.orientation %= 2 * math.pi  # Wrap around
-
-        # Update position
-        dx = linear_velocity * dt * math.cos(self.orientation)
-        dy = linear_velocity * dt * math.sin(self.orientation)
-        self.position += np.array([dx, dy])
-
-    def draw(self, surface, color=(0, 0, 255)):
-        # Calculate triangle vertices for drawing the robot
-        angle = self.orientation
-        points = [
-            (self.position[0] + self.size * math.cos(angle), self.position[1] + self.size * math.sin(angle)),
-            (self.position[0] + self.size * math.cos(angle + 2.2), self.position[1] + self.size * math.sin(angle + 2.2)),
-            (self.position[0] + self.size * math.cos(angle - 2.2), self.position[1] + self.size * math.sin(angle - 2.2))
-        ]
-        pygame.draw.polygon(surface, color, points)
-
 class Wall:
     def __init__(self, x, y, width, height):
         self.rect = pygame.Rect(x, y, width, height)
@@ -175,6 +147,37 @@ def check_collision(robot_rect, walls):
             return True
     return False
 
+def move_robot(true_state, control_inputs, walls):
+
+    # Assuming control_inputs are [linear_acceleration, angular_acceleration]
+    linear_acceleration, angular_acceleration = control_inputs[0, 0], control_inputs[1, 0]
+    temp_true = true_state.copy()
+    # Update velocities based on acceleration
+    true_state[3]  = linear_acceleration * (.6 + np.random.random()* 0.8) #+= linear_acceleration * dt  # Update linear velocity
+    #true_state[5] *= .99
+    true_state[5] = angular_acceleration #* dt # Update angular velocity
+    
+
+    # Convert orientation to radians for calculations
+    orientation_rad = math.radians(true_state[2, 0])
+
+    # Update position based on updated velocity
+    true_state[0] += true_state[3] * dt * math.cos(orientation_rad) # Update x position
+    true_state[1] += true_state[3] * dt * math.sin(orientation_rad) # Update y position
+
+    # Update orientation based on angular velocity
+    true_state[2] += math.degrees(true_state[5] * dt)  # Update orientation
+
+    # Create robot_rect for collision detection
+    robot_rect = pygame.Rect(int(true_state[0, 0]) , int(true_state[1, 0]), 1, 1)
+
+
+    if check_collision(robot_rect, walls):
+        true_state[0] = temp_true[0]
+        true_state[1] = temp_true[1]
+        true_state[3] = 0
+
+    return true_state
 def draw_robot(surface, position, orientation, color):
     """ Draw the robot as a triangle representing its orientation. """
     robot_size = 20
@@ -249,9 +252,10 @@ def render_text(screen, text, position, font_size=30, color=(255, 255, 255)):
 def rotate_covariance_matrix(theta, sigma_radial, sigma_perpendicular):
     R_theta = np.array([[np.cos(theta), -np.sin(theta)], 
                         [np.sin(theta), np.cos(theta)]])
-    R_unrotated = np.array([[sigma_radial**2, 0], 
-                            [0, sigma_perpendicular**2]])
+    R_unrotated = np.array([[sigma_radial, 0], 
+                            [0, sigma_perpendicular]])
     R_rotated = R_theta @ R_unrotated @ R_theta.T
+    np.linalg.svd(R_rotated)
     return R_rotated
 
 
@@ -262,8 +266,7 @@ clock = pygame.time.Clock()
 
 # Initialize robot state with expanded state vector
 true_state = np.array([[400.0], [300.0], [275.0], [0.0], [0.0], [0.0]])  # Include velocity components
-# Initialization
-robot = Robot(400, 300, 0)
+
 
 
 # Kalman Filter Setup with expanded state vector
@@ -296,16 +299,16 @@ B = np.array([[dt, 0, 0],
 # Measurement matrix temp
 H = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],  # Measure x_position
                        [0, 1, 0, 0, 0, 0, 0, 0, 0]]) # Measure y_position
-# Measurement matrix for position
+
 # Measurement matrix for position (assuming measurements are x and y position)
 H_position = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],  # Measure x_position
                        [0, 1, 0, 0, 0, 0, 0, 0, 0]]) # Measure y_position
 
 # Measurement matrix for angle (assuming measurement is orientation)
 H_angle = np.array([[0, 0, 1, 0, 0, 0, 0, 0, 0]])    # Measure orientation
-position_measurement_noise_variance = 2500
+
 angle_measurement_noise_variance = .01
-R_position = np.eye(2) * position_measurement_noise_variance
+
 R_angle = np.array([[angle_measurement_noise_variance]])
 
 sigma_radial = 50.0  # Example value, adjust as needed
@@ -356,93 +359,43 @@ while True:
             sys.exit()
 
 
-
-    # Simulate Control Inputs (adapt as needed)
-    # if time %100 < 25:
-    #     linear_velocity = 20
-    #     angular_velocity = 0
-    # elif time %100 < 50:
-    #     linear_velocity = 0
-    #     angular_velocity = 5
-    # elif time %100 < 75:
-    #     linear_velocity = 20
-    #     angular_velocity = 0
-    # elif time %100 < 100:
-    #     linear_velocity = 0
-    #     angular_velocity = 5
-    # Get distance to the wall
     distance_to_wall, _ = get_distance_to_wall(true_state[:2], true_state[2], walls, screen)
     _, wall_collide = get_distance_to_wall(kf.x[:2], kf.x[2], walls, screen)
     if distance_to_wall < 80 and turn_time <= 0:
-        turn_time = np.random.random() * 2 + 2 + 2
+        turn_time = np.random.random() * 2 + 2 #+ 2
         total_turn_time = turn_time
 
-    # linear_velocity = 0
-    # if time < 10:
     linear_velocity = 10
     angular_velocity = 0
     if turn_time > 0:
-        if turn_time < 2:
-            linear_velocity = 0
-            angular_velocity = 0
-        else:
-            linear_velocity = 0
-            angular_velocity = .3
-        # else:
-        #     linear_velocity = 0
-        #     angular_velocity = -0.1
-
+        linear_velocity = 0
+        angular_velocity = .3
         turn_time -= dt
 
     
 
     control_inputs = np.array([[linear_velocity], [angular_velocity]])
 
-    # Assuming control_inputs are [linear_acceleration, angular_acceleration]
-    linear_acceleration, angular_acceleration = control_inputs[0, 0], control_inputs[1, 0]
-    temp_true = true_state.copy()
-    # Update velocities based on acceleration
-    true_state[3]  = linear_acceleration * (.6 + np.random.random()* 0.8) #+= linear_acceleration * dt  # Update linear velocity
-    #true_state[5] *= .99
-    true_state[5] = angular_acceleration #* dt # Update angular velocity
-    
 
-    # Convert orientation to radians for calculations
-    orientation_rad = math.radians(true_state[2, 0])
-
-    # Update position based on updated velocity
-    true_state[0] += true_state[3] * dt * math.cos(orientation_rad) # Update x position
-    true_state[1] += true_state[3] * dt * math.sin(orientation_rad) # Update y position
-
-    # Update orientation based on angular velocity
-    true_state[2] += math.degrees(true_state[5] * dt)  # Update orientation
-
-    # Note: Ensure that the orientation is correctly wrapped around if needed
-
+    true_state = move_robot(true_state, control_inputs, walls)
 
     
-    # Create robot_rect for collision detection
-    robot_rect = pygame.Rect(int(true_state[0, 0]) , int(true_state[1, 0]), 1, 1)
-
-
-    if check_collision(robot_rect, walls):
-        true_state[0] = temp_true[0]
-        true_state[1] = temp_true[1]
-        true_state[3] = 0
-
     estx = kf.x[0, 0]
     esty = kf.x[1, 0]
     orientation_rad2 = math.radians(kf.x[2, 0])
 
     # Predict step
     predict_control  = np.array([[linear_velocity * math.cos(orientation_rad2) ], [linear_velocity* math.sin(orientation_rad2)], [angular_velocity]])
-    kf.predict(predict_control, walls=walls)
+    
+    Q_rotate = rotate_covariance_matrix(orientation_rad2, 1, .0000001) 
+    # print(Q_rotate, "1")
+    Q[0:2, 0:2] = Q_rotate * 1
+    kf.predict(predict_control, walls=walls, Q = Q)
 
     # Update with position measurement
     # if position_measurement_available(true_state):
     #     position_measurement = get_position_measurement(true_state)
     #     R_postemp = rotate_covariance_matrix(orientation_rad, sigma_radial, sigma_perpendicular)
-    #     # kf.set_measurement_matrix(H_position, R_postemp)
     #     kf.update(position_measurement, H_position, R_postemp)
 
     #distance_to_wall
@@ -465,32 +418,8 @@ while True:
                 # if wall_collide.rect.y < wall_collide.rect.height:
                 oriented_dist = wall_collide.rect.x - np.sin(orientation_rad) * distance_to_wall * (0.8  + np.random.random() * .4)
         else:
-            # # # Determine the measurement matrix H based on orientation
-            # if -np.pi/4 + angle_strict < orientation_rad < np.pi/4- angle_strict:  # Facing up
-            #     # print("1", orientation_rad)
-            #     H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0, 0]])  # Measure y_position
-            #     oriented_dist = 480 - np.cos(orientation_rad) * distance_to_wall#true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
-            # elif -3*np.pi/4 + angle_strict < orientation_rad < -np.pi/4 - angle_strict:  # Facing left
-            #     # print("2", orientation_rad)
-            #     H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0]])  # Measure x_position
-            #     oriented_dist = 120 - np.sin(orientation_rad) * distance_to_wall#true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
-            # elif np.pi/4 + angle_strict < orientation_rad < 3*np.pi/4- angle_strict:  # Facing right
-            #     # print("3", orientation_rad)
-            #     H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0]])  # Measure x_position
-            #     oriented_dist = 680 - np.sin(orientation_rad) * distance_to_wall#true_state[0] + np.random.normal(0, 5)#np.sin(orientation_rad) * distance_to_wall
-            # elif -3*np.pi/4 - angle_strict > orientation_rad  or orientation_rad > 3*np.pi/4 + angle_strict:  # Facing down
-            #     # print("4", orientation_rad)
-            #     H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0, 0]])  # Measure y_position
-            #     oriented_dist = 120 - np.cos(orientation_rad) * distance_to_wall#true_state[1] + np.random.normal(0, 5)#oriented_dist = np.cos(orientation_rad) * distance_to_wall
-            # else:
                 measure = False
-                # print("5", orientation_rad)
-        # else:
-        #         measure = False
 
-
-
-        
         if measure:
             # Measurement noise covariance
             R_tof = np.array([[tof_measurement_noise_variance]])
@@ -502,17 +431,8 @@ while True:
     # Update with angle measurement
     if angle_measurement_available(true_state):
         angle_measurement = get_angle_measurement(true_state)
-        # kf.set_measurement_matrix(H_angle, R_angle)
+        
         kf.update(angle_measurement, H_angle, R_angle)
-
-    # estimated_rect = pygame.Rect(int(kf.x[0, 0])-25, int(kf.x[1, 0])-25, 50, 50)
-
-    # # Check for collision with walls
-    # if check_collision(estimated_rect, walls):
-    #     # Handle collision
-    #     # For example, you might reset the estimated position to its previous value
-    #     kf.x[0, 0] = estx
-    #     kf.x[1, 0] = esty
 
 
     # Visualization
@@ -524,7 +444,7 @@ while True:
 
     draw_robot(screen, true_state[:2], true_state[2], (0, 0, 255))  # True state
     draw_robot(screen, kf.x[:2], kf.x[2], (255, 0, 0))  # Estimated state
-    draw_ellipse(screen, (0, 255, 0), kf.x[:2], kf.P)  # Uncertainty ellipse
+    draw_ellipse(screen, (0, 255, 0), kf.x[:2], kf.P )  # Uncertainty ellipse
 
 
     
