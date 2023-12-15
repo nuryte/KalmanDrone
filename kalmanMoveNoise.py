@@ -20,13 +20,15 @@ class KalmanFilter:
         self.R = R
 
 
-    def predict(self, u=0, walls=None, Q = None):
+    def predict(self, u=0, walls=None, Q = None, A = None):
+        if Q is not None:
+            self.Q = Q
+        if A is not None:
+            self.A = A
         self.x = np.dot(self.A, self.x) + np.dot(self.B, u)
-        if Q is None:
-            self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
-        else:
-            # print(Q[0:2, 0:2])
-            self.P = np.dot(np.dot(self.A, self.P), self.A.T) + Q
+        
+        self.P = np.dot(np.dot(self.A, self.P), self.A.T) + self.Q
+        
 
         for i in range(len(P)):
             for j in range(len(P[i])):
@@ -140,6 +142,13 @@ maxy_wall = 400
 walls = [Wall(minx_wall, miny_wall, maxx_wall, 1), Wall(minx_wall, maxy_wall + miny_wall, maxx_wall, 1),
          Wall(minx_wall, miny_wall, 1, maxy_wall), Wall(maxx_wall + minx_wall, miny_wall, 1, maxy_wall)]
 
+angle_noise = 0
+drift_angle = 0#np.pi/2#.3
+drift_velocity = 1
+
+drift_x = math.cos(drift_angle) * drift_velocity
+drift_y = math.sin(drift_angle) * drift_velocity
+
 def check_collision(robot_rect, walls):
     for wall in walls:
         if robot_rect.colliderect(wall.rect):
@@ -152,7 +161,7 @@ def move_robot(true_state, control_inputs, walls):
     linear_acceleration, angular_acceleration = control_inputs[0, 0], control_inputs[1, 0]
     temp_true = true_state.copy()
     # Update velocities based on acceleration
-    true_state[3]  = linear_acceleration * (.6 + np.random.random()* 0.8) #+= linear_acceleration * dt  # Update linear velocity
+    true_state[3]  = linear_acceleration #* (.6 + np.random.random()* 0.8) #+= linear_acceleration * dt  # Update linear velocity
     #true_state[5] *= .99
     true_state[5] = angular_acceleration #* dt # Update angular velocity
     
@@ -161,8 +170,11 @@ def move_robot(true_state, control_inputs, walls):
     orientation_rad = math.radians(true_state[2, 0])
 
     # Update position based on updated velocity
-    true_state[0] += true_state[3] * dt * math.cos(orientation_rad) # Update x position
-    true_state[1] += true_state[3] * dt * math.sin(orientation_rad) # Update y position
+    drift_x = math.cos(drift_angle + orientation_rad) * drift_velocity
+    drift_y = math.sin(drift_angle + orientation_rad) * drift_velocity
+    
+    true_state[0] += true_state[3] * dt * math.cos(orientation_rad + angle_noise) + drift_x * dt# Update x position
+    true_state[1] += true_state[3] * dt * math.sin(orientation_rad + angle_noise) + drift_y * dt # Update y position
 
     # Update orientation based on angular velocity
     true_state[2] += math.degrees(true_state[5] * dt)  # Update orientation
@@ -209,6 +221,7 @@ def draw_ellipse(surface, color, position, covariance, scale=2):
 
     # Calculate eigenvalues and eigenvectors
     eigenvalues, eigenvectors = np.linalg.eig(pos_covariance)
+    eigenvectors = np.real(eigenvectors)
 
     # Order eigenvalues and eigenvectors
     order = eigenvalues.argsort()[::-1]
@@ -258,18 +271,12 @@ def rotate_covariance_matrix(theta, sigma_radial, sigma_perpendicular):
     return R_rotated
 
 
-def kalRobotCoord(dt):
+def kalRobotCoord(dt, Q, P, A):
     b_linear = 0.1    # Linear drag coefficient
     b_angular = .5  # Angular drag coefficient
+    
 
-    A = np.array([
-        [1, 0, 0, dt, 0, 0],                # x_position updated
-        [0, 1, 0, 0, dt, 0],                # y_position updated
-        [0, 0, 1, 0, 0, 0],                # orientation updated
-        [0, 0, 0, 1, 0, 0],          # x_velocity updated with drag
-        [0, 0, 0, 0, 1, 0],          # y_velocity updated with drag
-        [0, 0, 0, 0, 0, 0]          # angular velocity updated with drag
-        ])                   
+                 
 
     B = np.array([[dt, 0, 0],
                 [0, dt, 0],
@@ -277,56 +284,19 @@ def kalRobotCoord(dt):
                 [0, 0, 0],  # Control input 1 affects x_velocity
                 [0, 0, 0],  # Control input 2 affects y_velocity
                 [0, 0, 0],  
+                [0, 0, 0],  
+                [0, 0, 0],  
                 ])  # Assuming no direct control input for angular velocity
 
 
     # Measurement matrix temp
-    H = np.array([[1, 0, 0, 0, 0, 0],  # Measure x_position
-                        [0, 1, 0, 0, 0, 0]]) # Measure y_position
+    H = np.array([[1, 0, 0, 0, 0, 0,0,0],  # Measure x_position
+                        [0, 1, 0, 0, 0, 0,0,0]]) # Measure y_position
 
-    initial_covariance_value = 20
 
-    Q = np.eye(6) * .001 #increases how fast the uncertainty expands
+    #Q = np.eye(8) * .001 #increases how fast the uncertainty expands
     R = np.eye(3) * 10 #unused but should give how good the measurment is
-    P = np.eye(6) * initial_covariance_value  # initial_covariance_value is a tuning parameter
-
-    kf = KalmanFilter(dt, A, B, H, Q, R, P)
-    return kf
-
-def kalRobotControl(dt):
-    
-
-    A = np.array([
-        [1, 0, 0, dt, 0, 0, 0, 0, 0],                # x_position updated
-        [0, 1, 0, 0, dt, 0, 0, 0, 0],                # y_position updated
-        [0, 0, 1, 0, 0, 0, 0, 0, 0],                # orientation updated
-        [0, 0, 0, 1, 0, 0, 0, 0, 0],          # x_velocity updated with drag
-        [0, 0, 0, 0, 1, 0, 0, 0, 0],          # y_velocity updated with drag
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],         # angular_velocity updated with drag
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],                           # x_acceleration
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],                           # y_accel
-        [0, 0, 0, 0, 0, 0, 0, 0, 0]]) 
-
-    B = np.array([[dt, 0, 0],
-                [0, dt, 0],
-                [0, 0, dt],
-                [0, 0, 0],  # Control input 1 affects x_velocity
-                [0, 0, 0],  # Control input 2 affects y_velocity
-                [0, 0, 0],
-                [0, 0, 0],
-                [0, 0, 0],
-                [0, 0, 0]])  # Assuming no direct control input for angular velocity
-
-
-    # Measurement matrix temp
-    H = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0],  # Measure x_position
-                        [0, 1, 0, 0, 0, 0, 0, 0, 0]]) # Measure y_position
-
-    initial_covariance_value = 20
-
-    Q = np.eye(6) * .001 #increases how fast the uncertainty expands
-    R = np.eye(3) * 10 #unused but should give how good the measurment is
-    P = np.eye(6) * initial_covariance_value  # initial_covariance_value is a tuning parameter
+    #P = np.eye(8) * initial_covariance_value  # initial_covariance_value is a tuning parameter
 
     kf = KalmanFilter(dt, A, B, H, Q, R, P)
     return kf
@@ -361,14 +331,14 @@ screen = pygame.display.set_mode((800, 600))
 clock = pygame.time.Clock()
 
 # Initialize robot state with expanded state vector
-true_state = np.array([[400.0], [300.0], [275.0], [0.0], [0.0], [0.0]])  # Include velocity components
+true_state = np.array([[400.0], [300.0], [90.0], [0.0], [0.0], [0.0]])  # Include velocity components
 
 # Measurement matrix for position (assuming measurements are x and y position)
-H_position = np.array([[1, 0, 0, 0, 0,0],  # Measure x_position
-                    [0, 1, 0, 0, 0,0]]) # Measure y_position
+H_position = np.array([[1, 0, 0, 0, 0, 0,0,0],  # Measure x_position
+                    [0, 1, 0, 0, 0, 0,0,0]]) # Measure y_position
 
 # Measurement matrix for angle (assuming measurement is orientation)
-H_angle = np.array([[0, 0, 1, 0, 0,0]])    # Measure orientation
+H_angle = np.array([[0, 0, 1, 0, 0,0,0,0]])    # Measure orientation
 
 angle_measurement_noise_variance = .01
 
@@ -380,12 +350,34 @@ sigma_perpendicular = 20.0  # Example value, adjust as needed
 # Kalman Filter Setup with expanded state vector
 dt = 0.1  # Time step
 
-Q = np.eye(6) * .001 #increases how fast the uncertainty expands
-P = np.eye(6) * 20  # initial_covariance_value is a tuning parameter
+initial_covariance_value = 20
+Q = np.eye(8) * .001 #increases how fast the uncertainty expands
+Q[6][6] = 0
+Q[7][7] = 0
+P = np.eye(8) * 20  # initial_covariance_value is a tuning parameter
+A = np.array([
+    [1, 0, 0, 0, 0, 0,0,0],                # x_position updated (need to apply rotation on the drift (6,7))
+    [0, 1, 0, 0, 0, 0,0,0],                # y_position updated (need to apply rotation on the drift (6,7))
+    [0, 0, 1, 0, 0, dt,0,0],                # orientation updated
+    [0, 0, 0, 1, 0, 0,0,0],          # x_velocity updated with drag
+    [0, 0, 0, 0, 1, 0,0,0],          # y_velocity updated with drag
+    [0, 0, 0, 0, 0, 1,0,0],          # angular velocity updated with drag
+    [0, 0, 0, 0, 0, 0,1,0] ,         # x control abnormalities
+    [0, 0, 0, 0, 0, 0,0,1]           # y control abnormalities
+    ])  
 
+net_rotate_estimation = np.zeros((2,2))
 # Main Loop
 
-kf = kalRobotCoord(dt)
+kf = kalRobotCoord(dt, Q, P, A)
+
+tof_measurement_noise_variance = 1000
+control_measurement_noise_variance = 100
+# Measurement noise covariance
+R_tof = np.array([[tof_measurement_noise_variance]])
+R_control = np.array([[control_measurement_noise_variance]])
+angle_strict = np.pi/8
+
 
 kf.x[0] = true_state[0]
 kf.x[1] = true_state[1]
@@ -407,7 +399,7 @@ while True:
         turn_time = np.random.random() * 2 + 2 #+ 2
         total_turn_time = turn_time
 
-    linear_velocity = 10
+    linear_velocity = 20
     angular_velocity = 0
     if turn_time > 0:
         linear_velocity = 0
@@ -425,14 +417,23 @@ while True:
     estx = kf.x[0, 0]
     esty = kf.x[1, 0]
     orientation_rad2 = math.radians(kf.x[2, 0])
+    orientation_rad = math.atan2(math.cos(math.radians(kf.x[2,0])),   math.sin(math.radians(kf.x[2,0]))) #normalize angle between -pi and pi
 
     # Predict step
     predict_control  = np.array([[linear_velocity * math.cos(orientation_rad2) ], [linear_velocity* math.sin(orientation_rad2)], [angular_velocity]])
     
-    Q_rotate = rotate_covariance_matrix(orientation_rad2, 1, .1) 
-    # print(Q_rotate, "1")
-    Q[0:2, 0:2] = Q_rotate 
-    kf.predict(predict_control, walls=walls, Q = Q)
+    rotate_estimation = np.array([[np.cos(orientation_rad), -np.sin(orientation_rad)], 
+                    [np.sin(orientation_rad), np.cos(orientation_rad)]])
+    net_rotate_estimation += rotate_estimation * dt
+    
+    # Q_rotate = rotate_covariance_matrix(orientation_rad2, 10, .1) 
+    # # print(Q_rotate, "1")
+    # Q[0:2, 0:2] = Q_rotate 
+    #A[0:2, 6:8] = rotate_estimation
+    # print(A)
+    kf.predict(predict_control, walls=walls, Q = Q, A = A)
+
+    
 
     # Update with position measurement
     # if position_measurement_available(true_state):
@@ -441,33 +442,45 @@ while True:
     #     kf.update(position_measurement, H_position, R_postemp)
 
     #distance_to_wall
-    tof_measurement_noise_variance = 10000
-    angle_strict = np.pi/8
     # Measurement matrix temp
     measure = True
     oriented_dist = 1
-    orientation_rad = math.atan2(math.cos(math.radians(kf.x[2,0])),   math.sin(math.radians(kf.x[2,0]))) #normalize angle between -pi and pi
+    pos_error = 0
     if distance_to_wall < detection_distance:# and turn_time <= 0:#position_measurement_available(true_state):
         
         if wall_collide is not None:
             if wall_collide.rect.width > wall_collide.rect.height:
-                H_tof = np.array([[0, 1, 0, 0, 0, 0]])  # Measure y_position
+                H_tof = np.array([[0, 1, 0, 0, 0, 0,0,0]])  # Measure y_position
                 
-                oriented_dist = wall_collide.rect.y - np.cos(orientation_rad) *  np.random.normal(distance_to_wall, distance_to_wall * .2)
+                oriented_dist = wall_collide.rect.y - np.cos(orientation_rad) *  np.random.normal(distance_to_wall, distance_to_wall * 0)
+
+                H_control = np.array([[0, 0, 0, 0, 0, 0,net_rotate_estimation[0,0],net_rotate_estimation[0,1]]]) 
+                net_rotate_estimation[0,0] = 0
+                net_rotate_estimation[0,1] = 0
+                pos_error  = (oriented_dist - kf.x[1,0])/np.linalg.norm(H_control) # error in absolute y position
+                print(round(time,1), round(pos_error,1), round(kf.x[6,0],2), round(kf.x[7,0],2),round(H_control[0,6],2),round(H_control[0,7],2) ,round(net_rotate_estimation[1,0],2),round(net_rotate_estimation[1,1],2))
+                #need to use this error along with orientation angle
                 
             else:
-                H_tof = np.array([[1, 0, 0, 0, 0, 0]])  # Measure x_position
+                H_tof = np.array([[1, 0, 0, 0, 0, 0,0,0]])  # Measure x_position
                 # if wall_collide.rect.y < wall_collide.rect.height:
-                oriented_dist = wall_collide.rect.x - np.sin(orientation_rad) *  np.random.normal(distance_to_wall, distance_to_wall * .2)
+                oriented_dist = wall_collide.rect.x - np.sin(orientation_rad) *  np.random.normal(distance_to_wall, distance_to_wall * 0)
+                
+                H_control = np.array([[0, 0, 0, 0, 0, 0,net_rotate_estimation[1,0],net_rotate_estimation[1,1]]]) 
+                net_rotate_estimation[1,0] = 0
+                net_rotate_estimation[1,1] = 0
+                pos_error  = (oriented_dist - kf.x[0,0])/np.linalg.norm(H_control) #error in absolute x position
+                print(round(time,1), round(pos_error,1), round(kf.x[6,0],2), round(kf.x[7,0],2),round(net_rotate_estimation[0,0],2),round(net_rotate_estimation[0,1],2),round(H_control[0,6],2),round(H_control[0,7],2) )
         else:
                 measure = False
 
         if measure:
-            # Measurement noise covariance
-            R_tof = np.array([[tof_measurement_noise_variance]])
 
             # Update Kalman Filter with the distance measurement
             kf.update(oriented_dist, H_tof, R_tof)
+            
+            # Update Kalman Filter with the control measurement
+            kf.update(pos_error, H_control, R_control)
 
 
     # Update with angle measurement
@@ -502,10 +515,12 @@ while True:
     # Displaying the current and estimated state
     true_state_text = f"True State: x={true_state[0,0]:.2f}, y={true_state[1,0]:.2f}, angle={math.degrees(math.atan2(math.cos(math.radians(true_state[2,0])),   math.sin(math.radians(true_state[2,0])))):.2f}, vx={true_state[3,0]:.2f}, vy={true_state[4,0]:.2f}, omega={true_state[5,0]:.2f}"
     estimated_state_text = f"Estimated: x={kf.x[0,0]:.2f}, y={kf.x[1,0]:.2f}, angle={math.degrees(math.atan2(math.cos(math.radians(kf.x[2,0])),   math.sin(math.radians(kf.x[2,0])))):.2f}, vx={kf.x[3,0]:.2f}, vy={kf.x[4,0]:.2f}, omega={kf.x[5,0]:.2f}"
+    #control_text = f"control_error: x={(drift_x - kf.x[6,0]):.2f}, y={drift_y - kf.x[7,0]:.2f} "
+    control_text = f"control_error: x={( kf.x[6,0]):.2f}, y={ kf.x[7,0]:.2f} "
     distance_text = f"Distance to wall: {distance_to_wall:.2f}"
     render_text(screen, true_state_text, (10, 10))
     render_text(screen, estimated_state_text, (10, 40))
-    render_text(screen, distance_text, (10, 60))
+    render_text(screen, control_text, (10, 60))
 
     pygame.display.flip()
 
