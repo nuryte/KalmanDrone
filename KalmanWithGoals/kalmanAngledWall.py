@@ -32,7 +32,6 @@ class KalmanFilter:
             if inside_wall:
                 self.x = handle_wall_collision(self.x, wall, closest_side)
 
-        # logging.debug(f"Predicted state: {self.x}")
         return self.x
 
     def update(self, z, H_custom, R_custom):
@@ -41,8 +40,6 @@ class KalmanFilter:
         K = np.dot(np.dot(self.P, H_custom.T), np.linalg.inv(S))
         self.x = self.x + np.dot(K, y)
         self.P = self.P - np.dot(K, np.dot(H_custom, self.P))
-
-        # logging.debug(f"Updated state: {self.x}")
 
 class AngledWall:
     def __init__(self, x1, y1, x2, y2):
@@ -67,17 +64,11 @@ class AngledWall:
         return math.sqrt(dx*dx + dy*dy)
 
     def collidepoint(self, x, y):
-        # Check if the point (x, y) is close enough to the line segment to be considered a collision
         distance = self.get_distance(x, y)
         if distance < 1:
-            # Ensure the point is within the bounds of the line segment
-            if self.x1 <= x <= self.x2 or self.x2 <= x <= self.x1:
-                if self.y1 <= y <= self.y2 or self.y2 <= y <= self.y1:
-                    return True
+            if min(self.x1, self.x2) <= x <= max(self.x1, self.x2) and min(self.y1, self.y2) <= y <= max(self.y1, self.y2):
+                return True
         return False
-
-
-
 
 class Wall:
     def __init__(self, x, y, width, height):
@@ -101,10 +92,12 @@ def get_distance_to_wall(robot_position, robot_orientation, walls, screen):
     wall_collide = None
     for wall in walls:
         if isinstance(wall, AngledWall):
-            distance = wall.get_distance(start_x, start_y)
-            if distance < min_distance:
-                min_distance = distance
-                wall_collide = wall
+            intersect_point = wall_intersection_point(wall, start_point, (end_x, end_y))
+            if intersect_point:
+                distance = math.hypot(intersect_point[0] - start_x, intersect_point[1] - start_y)
+                if distance < min_distance:
+                    min_distance = distance
+                    wall_collide = wall
         else:
             if wall.rect.clipline(start_point, end_point):
                 points = wall.rect.clipline(start_point, end_point)
@@ -116,6 +109,21 @@ def get_distance_to_wall(robot_position, robot_orientation, walls, screen):
 
     return min_distance, wall_collide
 
+def wall_intersection_point(wall, start_point, end_point):
+    """ Returns the intersection point of the sensor line with the wall, or None if they don't intersect """
+    x1, y1, x2, y2 = wall.x1, wall.y1, wall.x2, wall.y2
+    x3, y3, x4, y4 = start_point[0], start_point[1], end_point[0], end_point[1]
+
+    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if denom == 0:
+        return None
+
+    px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
+    py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
+
+    if min(x1, x2) <= px <= max(x1, x2) and min(y1, y2) <= py <= max(y1, y2):
+        return (px, py)
+    return None
 
 def check_collision(robot_rect, walls):
     for wall in walls:
@@ -130,7 +138,6 @@ def check_collision(robot_rect, walls):
 def handle_wall_collision(state, wall, closest_side):
     if isinstance(wall, AngledWall):
         distance = wall.get_distance(state[0, 0], state[1, 0])
-        # Project the collision point away from the wall's line
         px, py = wall.x2 - wall.x1, wall.y2 - wall.y1
         norm = px * px + py * py
         u = ((state[0, 0] - wall.x1) * px + (state[1, 0] - wall.y1) * py) / float(norm)
@@ -138,7 +145,6 @@ def handle_wall_collision(state, wall, closest_side):
         closest_x = wall.x1 + u * px
         closest_y = wall.y1 + u * py
 
-        # Adjust position to move it just outside the wall
         adjust_x = closest_x + (state[0, 0] - closest_x) / distance
         adjust_y = closest_y + (state[1, 0] - closest_y) / distance
         state[0, 0] = adjust_x
@@ -154,8 +160,6 @@ def handle_wall_collision(state, wall, closest_side):
             state[1] = wall.rect.bottom + 1
 
     return state
-
-
 
 def move_robot(true_state, control_inputs, walls, dt, drift_x, drift_y, wind_x, wind_y, angle_noise):
     linear_acceleration, angular_acceleration = control_inputs[0, 0], control_inputs[1, 0]
@@ -352,6 +356,64 @@ def check_bounds(state, walls):
                 return True, closest_side, wall
     return False, None, None
 
+def rotate_covariance(covariance, angle, indices=(0, 1)):
+    rotation_matrix = np.array([
+        [np.cos(angle), -np.sin(angle)],
+        [np.sin(angle), np.cos(angle)]
+    ])
+    rotated_covariance = covariance.copy()
+    submatrix = covariance[np.ix_(indices, indices)]
+    rotated_submatrix = rotation_matrix @ submatrix @ rotation_matrix.T
+    rotated_covariance[np.ix_(indices, indices)] = rotated_submatrix
+    return rotated_covariance
+
+def inverse_rotate_covariance(covariance, angle, indices=(0, 1)):
+    inverse_rotation_matrix = np.array([
+        [np.cos(angle), np.sin(angle)],
+        [-np.sin(angle), np.cos(angle)]
+    ])
+    rotated_covariance = covariance.copy()
+    submatrix = covariance[np.ix_(indices, indices)]
+    rotated_submatrix = inverse_rotation_matrix @ submatrix @ inverse_rotation_matrix.T
+    rotated_covariance[np.ix_(indices, indices)] = rotated_submatrix
+    return rotated_covariance
+
+def translate_state(state, translation_vector):
+    translated_state = state.copy()
+    translated_state[:2] -= translation_vector.reshape(2, 1)
+    return translated_state
+
+def rotate_state(state, angle):
+    rotation_matrix = np.array([
+        [np.cos(angle), -np.sin(angle)],
+        [np.sin(angle), np.cos(angle)]
+    ])
+    position = state[:2]
+    rotated_position = np.dot(rotation_matrix, position)
+    rotated_state = state.copy()
+    rotated_state[:2] = rotated_position
+    return rotated_state
+
+def inverse_rotate_state(state, angle):
+    inverse_rotation_matrix = np.array([
+        [np.cos(angle), np.sin(angle)],
+        [-np.sin(angle), np.cos(angle)]
+    ])
+    position = state[:2]
+    rotated_position = np.dot(inverse_rotation_matrix, position)
+    rotated_state = state.copy()
+    rotated_state[:2] = rotated_position
+    return rotated_state
+
+def inverse_translate_state(state, translation_vector):
+    translated_state = state.copy()
+    translated_state[:2] += translation_vector.reshape(2, 1)
+    return translated_state
+
+
+
+
+
 time = 0
 turn_time = 0
 while True:
@@ -360,8 +422,7 @@ while True:
             pygame.quit()
             sys.exit()
 
-    distance_to_wall, _ = get_distance_to_wall(true_state[:2], true_state[2], walls, screen)
-    _, wall_collide = get_distance_to_wall(kf.x[:2], kf.x[2], walls, screen)
+    distance_to_wall, wall_collide = get_distance_to_wall(true_state[:2], true_state[2], walls, screen)
     if distance_to_wall < 80 and turn_time <= 0:
         turn_time = np.random.random() * 2 + 2
         total_turn_time = turn_time
@@ -399,9 +460,26 @@ while True:
     if distance_to_wall < 125 and angular_velocity == 0:
         if wall_collide is not None:
             if isinstance(wall_collide, AngledWall):
-                H_tof = np.array([[math.cos(wall_collide.angle), math.sin(wall_collide.angle), 0, 0, 0, 0, 0, 0]])
+                # Calculate translation and rotation
+                translation_vector = np.array([wall_collide.x1, wall_collide.y1])
+                rotation_angle = -wall_collide.angle
+
+                # Translate and rotate the state and covariance
+                translated_state = translate_state(kf.x, translation_vector)
+                rotated_state = rotate_state(translated_state, rotation_angle)
+                rotated_covariance = rotate_covariance(kf.P, rotation_angle, indices=(0, 1))
+
+                # Perform measurement update in rotated frame
+                kf.x = rotated_state  # Update the state before the update
+                kf.P = rotated_covariance  # Update the covariance before the update
+                H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0]])
                 oriented_dist = wall_collide.get_distance(estx, esty)
-                # print(math.cos(wall_collide.angle+3.14159), math.sin(wall_collide.angle+3.14159), oriented_dist)
+                kf.update(oriented_dist, H_tof, np.array([[10000]]))
+
+                # Rotate and translate back the state and covariance
+                rotated_back_state = inverse_rotate_state(kf.x, rotation_angle)
+                kf.x = inverse_translate_state(rotated_back_state, translation_vector)
+                kf.P = inverse_rotate_covariance(kf.P, rotation_angle, indices=(0, 1))
             else:
                 if wall_collide.rect.width > wall_collide.rect.height:
                     H_tof = np.array([[0, 1, 0, 0, 0, 0, 0, 0]])
@@ -409,7 +487,9 @@ while True:
                 else:
                     H_tof = np.array([[1, 0, 0, 0, 0, 0, 0, 0]])
                     oriented_dist = wall_collide.rect.x - np.cos(orientation_rad) * np.random.normal(distance_to_wall, distance_to_wall * 0.2)
-                kf.update(oriented_dist, H_tof, np.array([[100000]]))
+                kf.update(oriented_dist, H_tof, np.array([[10000]]))
+
+
 
     if angle_measurement_available():
         angle_measurement = get_angle_measurement(true_state)
